@@ -2,21 +2,43 @@
 #include <SPI.h>
 #include <Stepper.h>
 #include <Wire.h>
-#include <MPU6050.h>
+#include <TinyGPS++.h>
+#include <SoftwareSerial.h>
+#include <Adafruit_BME280.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_HMC5883_U.h>
 
+
+Adafruit_BME280 bme;
+#define DELAY_BETWEEN_READINGS_MS 1000
 
 #define STEPPER_STEPS_PER_REVOLUTION 100
 
+// GPS
+#define GPS_RX_PIN 7
+#define GPS_TX_PIN 10
+
+// BME 280
+#define BME_280_SDA_PIN 11
+#define BME_280_SCL_PIN 12
+#define SEALEVELPRESSURE_HPA (1013.25)
+
+
 int currentPercentage = 0;
 
-MPU6050 accelgyro;
+Adafruit_MPU6050 mpu;
 //MPU6050 accelgyro(0x69); // <-- use for AD0 high
 
 int16_t ax, ay, az;
 int16_t gx, gy, gz;
 
 Stepper airBrakesStepper(STEPPER_STEPS_PER_REVOLUTION, 8, 9, 10, 11);
-MPU6050 accelgyro;
+
+// GPS
+SoftwareSerial gpsSerial(GPS_RX_PIN, GPS_TX_PIN);
+TinyGPSPlus gps;
+static const uint32_t GPSBaud = 9600;
 
 typedef struct
 {
@@ -52,36 +74,85 @@ void setup()
   Fastwire::setup(400, true);
 #endif
 
-  accelgyro.initialize();
-  Serial.println(accelgyro.testConnection() ? "MPU6050 connection successful" : "MPU6050 connection failed");
+  // Try to initialize MPU6050
+  if (!mpu.begin()) {
+    Serial.println("Failed to find MPU6050 chip");
+    while (1) {
+      delay(10);
+    }
+  }
+  mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
+  mpu.setGyroRange(MPU6050_RANGE_500_DEG);
+  mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
 
-  logToFile("accelerationX,accelerationY,accelerationZ,gyroX,gyroY,gyroZ,temperature");
+  // GPS
+  gpsSerial.begin(GPSBaud);
 
+  // BME 280
+  if (!bme.begin(0x76)) {
+    Serial.println("Could not find a valid BME280 sensor, check wiring!");
+    while (1);
+  }
+
+
+  logToFile("latitude,longitude,groundspeed,accelerationX,accelerationY,accelerationZ,gyroX,gyroY,gyroZ,temperature,altitude,humidity,pressure");
   Serial.println("Finished intialisation.");
 }
 
 
 void loop()
 {
-  int ax, ay, az, gx, gy, gz, temp;
-  char dataString[1024];
+  static char dataString[1024];
+  static double latitude, longitude, groundspeed;
+  static float altitude, humidity, pressure;
+
+  sensors_event_t a, g, temp;
+  mpu.getEvent(&a, &g, &temp);
+  Serial.print(a.acceleration.x);
+  Serial.print(a.acceleration.y);
+  Serial.print(a.acceleration.z); // m/s/s
+  Serial.print(g.gyro.x); // rad/s
+  Serial.print(g.gyro.y);
+  Serial.print(g.gyro.z);
+  Serial.print(temp.temperature); // °C
+
   // Inbuilt LED
   digitalWrite(LED_BUILTIN, HIGH);
 
-  accelgyro.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
-  temp = accelgyro.getTemperature();
+  // GPS
+  while (gpsSerial.available() > 0) {
+    gps.encode(gpsSerial.read());
+    if (gps.location.isUpdated()) {
+      // Only begins once a GPS fix is gained.
+      latitude = gps.location.lat();
+      longitude = gps.location.lng();
+    }
+    if (gps.speed.isUpdated()) {
+      groundspeed = gps.speed.kmph();
+    }
+  }
+  gpsSerial.flush();
 
-  sprintf(dataString, "%i,%i,%i,%i,%i,%i,%i", ax, ay, az, gx, gy, gz, temp);
+
+  // BME 280
+  //  temperature = bme.readTemperature()); // ° C
+
+  pressure = bme.readPressure() / 100.0F; // hPa
+
+  altitude = bme.readAltitude(SEALEVELPRESSURE_HPA);
+
+  humidity = bme.readHumidity(); // %
+
+  sprintf(dataString, "%f,%f,%f,%i,%i,%i,%i,%i,%i,%f,%f,%f,%f",latitude,longitude,groundspeed,ax,ay,az,gx,gy,gz,temp.temperature,altitude,humidity,pressure);
   logToFile(dataString);
 
-  delay(1000);
+  delay(DELAY_BETWEEN_READINGS_MS);
 }
 
 void setAirBrakes(int percentage) {
   int toChange = percentage - currentPercentage; // Determine which way to move
   airBrakesStepper.step((int) (toChange * STEPPER_STEPS_PER_REVOLUTION) / 100);
   currentPercentage = percentage;
-
 }
 
 void logToFile(String text) {
