@@ -10,59 +10,45 @@
 #include <Adafruit_HMC5883_U.h>
 
 
-Adafruit_BME280 bme;
-#define DELAY_BETWEEN_READINGS_MS 1000
+#define DELAY_BETWEEN_READINGS_MS 100
 
 #define STEPPER_STEPS_PER_REVOLUTION 100
 
 // GPS
-#define GPS_RX_PIN 7
-#define GPS_TX_PIN 10
+#define GPS_RX_PIN 10
+#define GPS_TX_PIN 9
+#define GPS_BAUD_RATE 9600
 
 // BME 280
-#define BME_280_SDA_PIN 11
-#define BME_280_SCL_PIN 12
+//#define BME_280_SDA_PIN 19
+//#define BME_280_SCL_PIN 18
 #define SEALEVELPRESSURE_HPA (1013.25)
-
 
 int currentPercentage = 0;
 
 Adafruit_MPU6050 mpu;
 //MPU6050 accelgyro(0x69); // <-- use for AD0 high
 
-int16_t ax, ay, az;
-int16_t gx, gy, gz;
-
-Stepper airBrakesStepper(STEPPER_STEPS_PER_REVOLUTION, 8, 9, 10, 11);
+Adafruit_BME280 bme;
 
 // GPS
 SoftwareSerial gpsSerial(GPS_RX_PIN, GPS_TX_PIN);
 TinyGPSPlus gps;
-static const uint32_t GPSBaud = 9600;
 
-typedef struct
-{
-  float time;
-  float height;
-  float vertical_speed;
-  float vertical_acceleration;
-  float temperature;
-} DATA_POINT;
+Stepper airBrakesStepper(STEPPER_STEPS_PER_REVOLUTION, 8, 9, 10, 11);
+
 
 void setup()
 {
   Serial.begin(9600);
   Serial.println("Initialising.");
 
-  // Inbuilt LED
-  pinMode(LED_BUILTIN, OUTPUT);
-
   Serial.print("Initializing SD card...");
 
   // see if the card is present and can be initialized:
   if (!SD.begin(BUILTIN_SDCARD)) {
-    Serial.println("Card failed, or not present");
-    return;
+    Serial.println("ERROR: Card failed, or not present");
+    exit(-1);
   }
   Serial.println("SD card initialized.");
 
@@ -76,23 +62,21 @@ void setup()
 
   // Try to initialize MPU6050
   if (!mpu.begin()) {
-    Serial.println("Failed to find MPU6050 chip");
-    while (1) {
-      delay(10);
-    }
+    Serial.println("ERROR: Failed to find MPU6050 chip");
+    exit(-1);
   }
   mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
   mpu.setGyroRange(MPU6050_RANGE_500_DEG);
   mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
 
   // GPS
-  gpsSerial.begin(GPSBaud);
+  gpsSerial.begin(GPS_BAUD_RATE);
 
   // BME 280
-  if (!bme.begin(0x76)) {
-    Serial.println("Could not find a valid BME280 sensor, check wiring!");
-    while (1);
-  }
+//  if (!bme.begin(/*0x76*/)) {
+//    Serial.println("ERROR: Could not find a valid BME280 sensor, check wiring!");
+//    exit(-1);
+//  }
 
 
   logToFile("latitude,longitude,groundspeed,accelerationX,accelerationY,accelerationZ,gyroX,gyroY,gyroZ,temperature,altitude,humidity,pressure");
@@ -102,22 +86,13 @@ void setup()
 
 void loop()
 {
-  static char dataString[1024];
+
   static double latitude, longitude, groundspeed;
   static float altitude, humidity, pressure;
 
+  char dataString[1024];
   sensors_event_t a, g, temp;
   mpu.getEvent(&a, &g, &temp);
-  Serial.print(a.acceleration.x);
-  Serial.print(a.acceleration.y);
-  Serial.print(a.acceleration.z); // m/s/s
-  Serial.print(g.gyro.x); // rad/s
-  Serial.print(g.gyro.y);
-  Serial.print(g.gyro.z);
-  Serial.print(temp.temperature); // °C
-
-  // Inbuilt LED
-  digitalWrite(LED_BUILTIN, HIGH);
 
   // GPS
   while (gpsSerial.available() > 0) {
@@ -135,18 +110,21 @@ void loop()
 
 
   // BME 280
-  //  temperature = bme.readTemperature()); // ° C
+//  //  temperature = bme.readTemperature()); // ° C
+//
+//  pressure = bme.readPressure() / 100.0F; // hPa
+//
+//  altitude = bme.readAltitude(SEALEVELPRESSURE_HPA);
+//
+//  humidity = bme.readHumidity(); // %
 
-  pressure = bme.readPressure() / 100.0F; // hPa
-
-  altitude = bme.readAltitude(SEALEVELPRESSURE_HPA);
-
-  humidity = bme.readHumidity(); // %
-
-  sprintf(dataString, "%f,%f,%f,%i,%i,%i,%i,%i,%i,%f,%f,%f,%f",latitude,longitude,groundspeed,ax,ay,az,gx,gy,gz,temp.temperature,altitude,humidity,pressure);
+  sprintf(dataString, "%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f", latitude, longitude, groundspeed, a.acceleration.x, a.acceleration.y, a.acceleration.z, g.gyro.x, g.gyro.y, g.gyro.z, temp.temperature, altitude, humidity, pressure);
   logToFile(dataString);
-
   delay(DELAY_BETWEEN_READINGS_MS);
+
+  if (false /* REPLACE WITH AIR BRAKES ON CONDITION */) {
+    setAirBrakes(100);
+  }
 }
 
 void setAirBrakes(int percentage) {
