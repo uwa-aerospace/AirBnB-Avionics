@@ -9,72 +9,72 @@
 #include <Adafruit_Sensor.h>
 #include <Adafruit_HMC5883_U.h>
 
-
-#define DELAY_BETWEEN_READINGS_MS 100
-
+// General constants
+#define DELAY_BETWEEN_READINGS_MS 250
+#define AIR_BRAKES_ON_DELAY 5000
 #define STEPPER_STEPS_PER_REVOLUTION 100
+#define TOTAL_ACCEL_TO_INDICATE_LAUNCH 10.0
 
-// GPS
+// GPS pins and constants
 #define GPS_RX_PIN 9
 #define GPS_TX_PIN 10
 #define GPS_BAUD_RATE 9600
 
-// BMP 280
-#define BME_280_SDA_PIN 19
-#define BME_280_SCL_PIN 18
+// BMP 280 constants
 #define SEALEVELPRESSURE_HPA 1019.66
 
-int currentPercentage = 0;
-
+// MPU6050 - accelerometer & gyroscope
 Adafruit_MPU6050 mpu;
-//MPU6050 accelgyro(0x69); // <-- use for AD0 high
 
-Adafruit_BMP280 bmp; // use I2C interface
+// BMP280 - pressure, temperature & altitude estimation
+Adafruit_BMP280 bmp;
 
-// GPS
+// GPS - latitude, longitude, groundspeed
 SoftwareSerial gpsSerial(GPS_RX_PIN, GPS_TX_PIN);
 TinyGPSPlus gps;
 
+// Air brakes stepper motor with pins
 Stepper airBrakesStepper(STEPPER_STEPS_PER_REVOLUTION, 8, 9, 10, 11);
 
+unsigned long launchTime = 0;
+int currentAirBrakesPercentage = 0;
+bool launched = false;
 
 void setup()
 {
   Serial.begin(9600);
-  Serial.println("Initialising.");
-
-  Serial.print("Initializing SD card...");
+  Serial.println("--- Air BnB Air Brakes test flight ---\n");
+  Serial.println("Beginning initialisation.");
+  Serial.println("-------------------------");
 
   // see if the card is present and can be initialized:
   if (!SD.begin(BUILTIN_SDCARD)) {
-    Serial.println("ERROR: Card failed, or not present");
+    Serial.println("x\tERROR: SD Card failed, or not present");
     exit(-1);
   }
-  Serial.println("SD card initialized.");
+  Serial.println("-\tSD card initialized.");
 
 
-
-#if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
   Wire.begin();
-#elif I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE
-  Fastwire::setup(400, true);
-#endif
+  Serial.println("-\tI2C Wire initialized.");
 
   // Try to initialize MPU6050
   if (!mpu.begin()) {
-    Serial.println("ERROR: Failed to find MPU6050 chip");
+    Serial.println("x\tERROR: Failed to find MPU6050 chip");
     exit(-1);
   }
   mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
   mpu.setGyroRange(MPU6050_RANGE_500_DEG);
   mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+  Serial.println("-\tMPU6050 (accelerometer & gyro) initialized.");
 
   // GPS
   gpsSerial.begin(GPS_BAUD_RATE);
+  Serial.println("-\tGPS Serial initialized.");
 
   // BMP 280
   if (!bmp.begin(0x76)) {
-    Serial.println(F("Could not find a valid BMP280 sensor, check wiring!"));
+    Serial.println("x\tERROR: Failed to find BMP280 chip");
     exit(-1);
   }
   /* Default settings from datasheet. */
@@ -83,10 +83,11 @@ void setup()
                   Adafruit_BMP280::SAMPLING_X16,    /* Pressure oversampling */
                   Adafruit_BMP280::FILTER_X16,      /* Filtering. */
                   Adafruit_BMP280::STANDBY_MS_500); /* Standby time. */
-
+  Serial.println("-\tBMP280 (pressure, temperature and (rough) altitude) initialized.");
 
   logToFile("latitude,longitude,groundspeed,accelerationX,accelerationY,accelerationZ,gyroX,gyroY,gyroZ,temperature,altitude,pressure(hPa)");
   Serial.println("Finished intialisation.");
+  Serial.println("-----------------------\n");
 }
 
 
@@ -95,7 +96,7 @@ void loop()
   static double latitude, longitude, groundspeed;
   static float altitude, temperature, pressure;
 
-  char dataString[1024];
+  char dataString[2048];
   sensors_event_t a, g, temp;
   mpu.getEvent(&a, &g, &temp);
 
@@ -116,23 +117,39 @@ void loop()
 
   //   BMP 280
   temperature = bmp.readTemperature();
-  pressure = bmp.readPressure()/100;
+  pressure = bmp.readPressure() / 100;
   altitude =  bmp.readAltitude(SEALEVELPRESSURE_HPA);
 
-  
+  // Log data to SD card
   sprintf(dataString, "%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f", latitude, longitude, groundspeed, a.acceleration.x, a.acceleration.y, a.acceleration.z, g.gyro.x, g.gyro.y, g.gyro.z, temperature, altitude, pressure);
   logToFile(dataString);
-  delay(DELAY_BETWEEN_READINGS_MS);
 
-  if (false /* REPLACE WITH AIR BRAKES ON CONDITION */) {
-    setAirBrakes(100);
+
+  // Activate air brakes a certain time after launch has occurred
+  if (!launched) {
+    launched = sqrt(pow(a.acceleration.x, 2) + pow(a.acceleration.y, 2) + pow(a.acceleration.z, 2)) > TOTAL_ACCEL_TO_INDICATE_LAUNCH;
+    if (launched) {
+      launchTime = millis();
+      char logText[1024];
+      sprintf(logText, "# Launch detected at time: %lu", launchTime);
+      logToFile(logText);
+    }
+  } else {
+    if (millis() - launchTime > AIR_BRAKES_ON_DELAY) {
+      setAirBrakes(100);
+    }
   }
+
+
+  delay(DELAY_BETWEEN_READINGS_MS);
 }
 
+
 void setAirBrakes(int percentage) {
-  int toChange = percentage - currentPercentage; // Determine which way to move
+  int toChange = percentage - currentAirBrakesPercentage; // Determine how much to move & which way
   airBrakesStepper.step((int) (toChange * STEPPER_STEPS_PER_REVOLUTION) / 100);
-  currentPercentage = percentage;
+  currentAirBrakesPercentage = percentage;
+
   char logText[1024];
   sprintf(logText, "# Air brakes set to percentage: %i%%", percentage);
   logToFile(logText);
@@ -149,6 +166,6 @@ void logToFile(String text) {
     Serial.printf("Written to file: %s\n", text);
   }
   else {
-    Serial.println("error opening datalog.txt"); // Error with file
+    Serial.printf("error opening datalog.txt. Cannot write: %s\n", text); // Error with file
   }
 }
