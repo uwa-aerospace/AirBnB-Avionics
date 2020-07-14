@@ -85,7 +85,7 @@ void setup()
                   Adafruit_BMP280::STANDBY_MS_500); /* Standby time. */
   Serial.println("-\tBMP280 (pressure, temperature and (rough) altitude) initialized.");
 
-  logToFile("latitude,longitude,groundspeed,accelerationX,accelerationY,accelerationZ,gyroX,gyroY,gyroZ,temperature,altitude,pressure(hPa)");
+  logToFile("latitude,longitude,groundspeed,GPSAltitude,accelerationX,accelerationY,accelerationZ,gyroX,gyroY,gyroZ,temperature,altitude,pressure(hPa)");
   Serial.println("Finished intialisation.");
   Serial.println("-----------------------\n");
 }
@@ -93,7 +93,7 @@ void setup()
 
 void loop()
 {
-  static double latitude, longitude, groundspeed;
+  static double latitude, longitude, groundspeed, GPSAltitude;
   static float altitude, temperature, pressure;
 
   char dataString[2048];
@@ -111,6 +111,9 @@ void loop()
     if (gps.speed.isUpdated()) {
       groundspeed = gps.speed.kmph();
     }
+    if (gps.altitude.isUpdated()) {
+      GPSAltitude = gps.altitude.meters();
+    }
   }
   gpsSerial.flush();
 
@@ -121,7 +124,7 @@ void loop()
   altitude =  bmp.readAltitude(SEALEVELPRESSURE_HPA);
 
   // Log data to SD card
-  sprintf(dataString, "%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f", latitude, longitude, groundspeed, a.acceleration.x, a.acceleration.y, a.acceleration.z, g.gyro.x, g.gyro.y, g.gyro.z, temperature, altitude, pressure);
+  sprintf(dataString, "%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f", latitude, longitude, groundspeed, GPSAltitude, a.acceleration.x, a.acceleration.y, a.acceleration.z, g.gyro.x, g.gyro.y, g.gyro.z, temperature, altitude, pressure);
   logToFile(dataString);
 
 
@@ -156,8 +159,7 @@ void setAirBrakes(int percentage) {
 }
 
 void logToFile(String text) {
-  // Log the data
-
+  // Log the data to the SD card
   File logFile = SD.open("AirBnB-flight-log.csv", FILE_WRITE);
 
   if (logFile) {
@@ -166,6 +168,6 @@ void logToFile(String text) {
     Serial.printf("Written to file: %s\n", text);
   }
   else {
-    Serial.printf("error opening datalog.txt. Cannot write: %s\n", text); // Error with file
+    Serial.printf("ERROR: SD Card & File - cannot write: '%s'\n", text); // Error with file
   }
 }
