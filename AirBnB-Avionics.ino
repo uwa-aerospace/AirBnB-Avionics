@@ -10,10 +10,10 @@
 #include <Adafruit_HMC5883_U.h>
 
 // General constants
-#define DELAY_BETWEEN_READINGS_MS 250
-#define AIR_BRAKES_ON_DELAY 5000
+#define DELAY_BETWEEN_READINGS_MS 100
+#define AIR_BRAKES_ON_DELAY_AFTER_LAUNCH 5000
 #define STEPPER_STEPS_PER_REVOLUTION 100
-#define TOTAL_ACCEL_TO_INDICATE_LAUNCH 10.0
+#define TOTAL_ACCEL_TO_INDICATE_LAUNCH 20.0
 
 // GPS pins and constants
 #define GPS_RX_PIN 9
@@ -34,11 +34,14 @@ SoftwareSerial gpsSerial(GPS_RX_PIN, GPS_TX_PIN);
 TinyGPSPlus gps;
 
 // Air brakes stepper motor with pins
-Stepper airBrakesStepper(STEPPER_STEPS_PER_REVOLUTION, 8, 9, 10, 11);
+//Stepper airBrakesStepper(STEPPER_STEPS_PER_REVOLUTION, 2, 3, 4, 5);
+#define AIR_BRAKES_ON_PIN 3
 
 unsigned long launchTime = 0;
 int currentAirBrakesPercentage = 0;
 bool launched = false;
+bool airBrakesMessagePrinted = false;
+char fileName[1024];
 
 void setup()
 {
@@ -52,6 +55,14 @@ void setup()
     Serial.println("x\tERROR: SD Card failed, or not present");
     exit(-1);
   }
+
+  //  sprintf(fileName, "AirBrakes.csv\0");
+  //  int i = 0;
+  //  while (SD.exists(fileName)) {
+  //    i++;
+  //    memset(fileName, 0, 1024);
+  //    sprintf(fileName, "AirBrakes%i.csv\0", i);
+  //  }
   Serial.println("-\tSD card initialized.");
 
 
@@ -85,7 +96,12 @@ void setup()
                   Adafruit_BMP280::STANDBY_MS_500); /* Standby time. */
   Serial.println("-\tBMP280 (pressure, temperature and (rough) altitude) initialized.");
 
-  logToFile("latitude,longitude,groundspeed,GPSAltitude,accelerationX,accelerationY,accelerationZ,gyroX,gyroY,gyroZ,temperature,altitude,pressure(hPa)");
+//  airBrakesStepper.step(-(STEPPER_STEPS_PER_REVOLUTION * 2));
+  pinMode(AIR_BRAKES_ON_PIN, OUTPUT);
+  digitalWrite(AIR_BRAKES_ON_PIN, LOW);
+  Serial.println("-\tAir brakes stepper motor reset to closed position.");
+
+  logToFile((char *)"latitude,longitude,groundspeed,GPSAltitude,accelerationX,accelerationY,accelerationZ,gyroX,gyroY,gyroZ,temperature,altitude,pressure(hPa)");
   Serial.println("Finished intialisation.");
   Serial.println("-----------------------\n");
 }
@@ -111,9 +127,7 @@ void loop()
     if (gps.speed.isUpdated()) {
       groundspeed = gps.speed.kmph();
     }
-    if (gps.altitude.isUpdated()) {
-      GPSAltitude = gps.altitude.meters();
-    }
+    GPSAltitude = gps.altitude.meters();
   }
   gpsSerial.flush();
 
@@ -138,7 +152,7 @@ void loop()
       logToFile(logText);
     }
   } else {
-    if (millis() - launchTime > AIR_BRAKES_ON_DELAY) {
+    if (millis() - launchTime > AIR_BRAKES_ON_DELAY_AFTER_LAUNCH) {
       setAirBrakes(100);
     }
   }
@@ -149,25 +163,33 @@ void loop()
 
 
 void setAirBrakes(int percentage) {
-  int toChange = percentage - currentAirBrakesPercentage; // Determine how much to move & which way
-  airBrakesStepper.step((int) (toChange * STEPPER_STEPS_PER_REVOLUTION) / 100);
-  currentAirBrakesPercentage = percentage;
-
-  char logText[1024];
-  sprintf(logText, "# Air brakes set to percentage: %i%%", percentage);
-  logToFile(logText);
+//  int toChange = percentage - currentAirBrakesPercentage; // Determine how much to move & which way
+//  airBrakesStepper.step((int) (toChange * STEPPER_STEPS_PER_REVOLUTION) / 100);
+//  currentAirBrakesPercentage = percentage;
+  if (percentage > 0) {
+    digitalWrite(AIR_BRAKES_ON_PIN, HIGH);
+  } else {
+    digitalWrite(AIR_BRAKES_ON_PIN, LOW);
+  }
+  if (!airBrakesMessagePrinted) {
+    char logText[1024];
+    sprintf(logText, "# Air brakes set to percentage: %i%%", percentage);
+    logToFile(logText);
+    airBrakesMessagePrinted = true;
+  }
 }
 
-void logToFile(String text) {
-  // Log the data to the SD card
-  File logFile = SD.open("AirBnB-flight-log.csv", FILE_WRITE);
+void logToFile(char text[]) {
+  File dataFile = SD.open("AirBnB.csv", FILE_WRITE);
 
-  if (logFile) {
-    logFile.println(text);
-    logFile.close();
-    Serial.printf("Written to file: %s\n", text);
+  // if the file is available, write to it:
+  if (dataFile) {
+    dataFile.println(text);
+    dataFile.close();
+    Serial.printf("Written to log: %s\n", text);
   }
+  // if the file isn't open, pop up an error:
   else {
-    Serial.printf("ERROR: SD Card & File - cannot write: '%s'\n", text); // Error with file
+    Serial.printf("ERROR: SD Card & File - cannot write to %s: '%s'\n", fileName, text); // Error with file
   }
 }
